@@ -22,7 +22,7 @@ def calculate_date_distance(dt, date_str1, date_str2):
     date_distance = len(dt.loc[date_str1: date_str2])
     return date_distance
     
-def compute_distance(dt, users_target, users_compare, user_distance, algorithms):
+def compute_distance(dt, users_target, users_compare, user_distance):
     """
     Compute a distance matrix using Dynamic Time Warping between a target and a comparison time series
     @param dt: dataFrame containing time series data indexed by dates
@@ -217,13 +217,11 @@ def main():
             format="YYYY/MM/DD"
         )
         compare_date = [date.strftime("%Y-%m-%d") for date in compare_date]
-        
-        algorithms = st.sidebar.selectbox('Algorithms:', ('DTW', 'DTWc', 'Corr/DTW', 'Corr/DTWc'))
 
         nsteps = st.sidebar.slider('N-Steps Ahead (in days)', min_value=0, max_value=100, value=0, step=10)
 
         if st.sidebar.button('Generate'):
-            similarity_distance = compute_distance(sample_data, target_date, compare_date, user_target_distance, algorithms)
+            similarity_distance = compute_distance(sample_data, target_date, compare_date, user_target_distance)
             dates_score_list = dates_score(sample_data, similarity_distance, user_target_distance)
             sorted_dates_score_list = sorted(dates_score_list, key=lambda x: x[2], reverse = True)
             filtered_dates = filter_overlaps(sorted_dates_score_list)
