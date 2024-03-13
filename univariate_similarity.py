@@ -6,9 +6,8 @@ import requests
 from dtaidistance import dtw
 import plotly.graph_objects as go
 from datetime import datetime
-from sklearn.preprocessing import MinMaxScaler
+import math
 st.set_option('deprecation.showPyplotGlobalUse', False)
-st.set_page_config(layout="wide")
 
 SECRET_KEY = ''
 
@@ -21,7 +20,15 @@ def calculate_date_distance(dt, date_str1, date_str2):
     """
     date_distance = len(dt.loc[date_str1: date_str2])
     return date_distance
-    
+
+def sigmoid(x):
+    """
+    Compute the sigmoid function
+    @param x: Input value
+    @return: Output value between 0 and 1
+    """
+    return 1 / (1 + math.exp(-x))
+
 def compute_distance(dt, users_target, users_compare, user_distance):
     """
     Compute a distance matrix using Dynamic Time Warping between a target and a comparison time series
@@ -41,7 +48,7 @@ def compute_distance(dt, users_target, users_compare, user_distance):
         compare_values -= compare_values[0]
         dtw_distance = dtw.distance_fast(target_values, compare_values)
         pcorr_coef = np.corrcoef(target_values, compare_values)[0, 1]
-        score = abs(pcorr_coef) / (dtw_distance + 1e-10)
+        score = sigmoid(abs(pcorr_coef) / (dtw_distance + 1e-10))
         matrix[sliced_data.index[0].strftime("%Y-%m-%d")] = score
     return matrix
 
@@ -90,14 +97,11 @@ def filter_overlaps(ranges):
 
 def normalize_df(df):
     """
-    Normalize the values of a pandas DataFrame using Min-Max scaling.
-    @param df: the dataFrame to be normalized
-    @return df_normalized: the normalized dataFrame
+    Normalize the values of a pandas DataFrame using z-score normalization.
+    @param df: the DataFrame to be normalized
+    @return df_normalized: the normalized DataFrame
     """
-    min_max_scaler = MinMaxScaler()
-    df_normalized = min_max_scaler.fit_transform(df)
-    df_normalized = pd.DataFrame(df_normalized, columns=df.columns)
-    df_normalized.index = df.index
+    df_normalized = (df - df.mean()) / df.std()
     return df_normalized
 
 def data_select(selected_data):    
@@ -115,7 +119,20 @@ def data_select(selected_data):
     data = data.dropna()
     return data
 
-def create_figure(sample_data, target_date, selected_data, values_list, title, subtract=False, n_steps = 0):
+def n_steps_ahead(sample_data, values_list, n_steps = 0, N = 5):
+    changes = []
+    for _, (_, end_date, _) in enumerate(values_list[:N], 1):
+        sliced_data = sample_data[end_date:][:n_steps]
+        sliced_data.reset_index(drop=True, inplace=True)
+        change = sliced_data.iloc[-1] - sliced_data.iloc[0]
+        changes.append(change[0])
+    df = pd.DataFrame(changes)
+    df = df.T
+    df.columns = [f'Graph {i}' for i in range(1, len(df.columns)+1)]
+    df.index = ['Change']
+    st.table(df)
+
+def create_figure(sample_data, target_date, selected_data, values_list, subtract=False, n_steps = 0, N = 5):
     """
     Create a Plotly figure with optional subtraction operation.
     @param sample_data: DataFrame containing sample data
@@ -127,7 +144,6 @@ def create_figure(sample_data, target_date, selected_data, values_list, title, s
     @param n_steps: n-step ahead (in days)
     @return fig: Plotly figure object
     """
-    N = 5
     WIDTH, HEIGHT = 800, 600
 
     fig = go.Figure()
@@ -148,7 +164,7 @@ def create_figure(sample_data, target_date, selected_data, values_list, title, s
 
     fig.add_trace(go.Scatter(x=target_data.index, y=target_trace, mode='lines', name=f"Target: {target_date[0]} to {target_date[1]}"))
     
-    for i, (start_date, end_date, _) in enumerate(values_list[:N], 1):
+    for i, (start_date, end_date, score) in enumerate(values_list[:N], 1):
         if n_steps > 0:
             get_length = len(sample_data.loc[start_date:end_date]) 
             sliced_data = sample_data[start_date:][:get_length + n_steps]
@@ -162,10 +178,9 @@ def create_figure(sample_data, target_date, selected_data, values_list, title, s
             sliced_trace = sliced_data[selected_data] - sliced_data[selected_data].iloc[0]
         else:
             sliced_trace = sliced_data[selected_data]
-        fig.add_trace(go.Scatter(x=sliced_data.index, y=sliced_trace, mode='lines', name=f'Graph {i}: {start_date.strftime("%Y-%m-%d")} to {end_date.strftime("%Y-%m-%d")}'))
+        fig.add_trace(go.Scatter(x=sliced_data.index, y=sliced_trace, mode='lines', name=f'Graph {i}: {start_date.strftime("%Y-%m-%d")} to {end_date.strftime("%Y-%m-%d")} ({round(score, 7)})'))
 
     fig.update_layout(
-        title=title,
         width=WIDTH,
         height=HEIGHT,
         xaxis=dict(showline=True, linewidth=1, linecolor='black', showgrid=True, gridwidth=1, gridcolor='gray'),
@@ -174,22 +189,23 @@ def create_figure(sample_data, target_date, selected_data, values_list, title, s
     fig.update_xaxes(showticklabels=False)
     return fig
 
+
 def main():
     st.sidebar.title('단일 유사기간 분석툴')
     selected_data = st.sidebar.selectbox(
-        'Time Series Data:', 
-        ('GT2 Govt', 'GT5 Govt', 'GT10 Govt', 'GT30 Govt', 'USYC2Y10 Index', 'USYC5Y30 Index', 'USYC1030 Index',
-         'USGGBE10 Index', 'GTII10 Govt', 'GTDEM2Y Govt', 'GTDEM5Y Govt', 'GTDEM10Y Govt', 'DEYC2Y10 Index',
-         'DEYC5Y30 Index', 'DEGGBE10 Index', 'GTDEMII10Y Govt', 'GTESP10Y Govt', 'GTITL10Y Govt', 'GTGBP10Y Govt',
-         'GTCAD10Y Govt', 'GTAUD10Y Govt', 'GTJPY10Y Govt', 'CCSWNI5 BGN Curncy', 'IRSWNI5 BGN Curncy', 'ODF29 Comdty',
-         'MPSW5E BGN Curncy', 'GVSK3YR Index', 'GVSK10YR Index', 'DXY Index', 'KRW Curncy', 'EUR Curncy', 'JPY Curncy',
-         'CNH Curncy', 'BRL Curncy', 'INR Curncy', 'MXN Curncy', 'SPX Index', 'CCMP Index', 'DAX Index', 'BCOM Index',
-         'XAU Curncy', 'USCRWTIC Index', 'TSFR3M Index', 'USGG3M Index', 'US0003M Index', 'UREPTA30 Index', 'LQD US Equity',
-         'HYG US Equity', 'CDX IG CDSI GEN 5Y Corp', 'CDX HY CDSI GEN 5Y SPRD Corp', 'EMLC US Equity', 'EMB US Equity',
-         'VIX Index', 'MOVE Index', '.VIXVXN Index', 'GFSIFLOW Index', 'JLGPUSPH Index', 'JLGPEUPH Index', 'MRIEM Index',
-         'ACMTP10 Index', 'FWISUS55 Index', 'ILM3NAVG Index', 'ECRPUS 1Y Index', 'CESIUSD Index', 'CESIUSH Index', 'CESIUSS Index',
-         'CESIEUR Index', 'CESIEUH Index', 'CESIEUS Index', 'CESIEM Index', 'CESIEMXP Index', 'CESIEMFW Index'
-         )
+            'Time Series Data:', 
+            ('GT2 Govt', 'GT5 Govt', 'GT10 Govt', 'GT30 Govt', 'USYC2Y10 Index', 'USYC5Y30 Index', 'USYC1030 Index',
+            'USGGBE10 Index', 'GTII10 Govt', 'GTDEM2Y Govt', 'GTDEM5Y Govt', 'GTDEM10Y Govt', 'DEYC2Y10 Index',
+            'DEYC5Y30 Index', 'DEGGBE10 Index', 'GTDEMII10Y Govt', 'GTESP10Y Govt', 'GTITL10Y Govt', 'GTGBP10Y Govt',
+            'GTCAD10Y Govt', 'GTAUD10Y Govt', 'GTJPY10Y Govt', 'CCSWNI5 BGN Curncy', 'IRSWNI5 BGN Curncy', 'ODF29 Comdty',
+            'MPSW5E BGN Curncy', 'GVSK3YR Index', 'GVSK10YR Index', 'DXY Index', 'KRW Curncy', 'EUR Curncy', 'JPY Curncy',
+            'CNH Curncy', 'BRL Curncy', 'INR Curncy', 'MXN Curncy', 'SPX Index', 'CCMP Index', 'DAX Index', 'BCOM Index',
+            'XAU Curncy', 'USCRWTIC Index', 'TSFR3M Index', 'USGG3M Index', 'US0003M Index', 'UREPTA30 Index', 'LQD US Equity',
+            'HYG US Equity', 'CDX IG CDSI GEN 5Y Corp', 'CDX HY CDSI GEN 5Y SPRD Corp', 'EMLC US Equity', 'EMB US Equity',
+            'VIX Index', 'MOVE Index', '.VIXVXN Index', 'GFSIFLOW Index', 'JLGPUSPH Index', 'JLGPEUPH Index', 'MRIEM Index',
+            'ACMTP10 Index', 'FWISUS55 Index', 'ILM3NAVG Index', 'ECRPUS 1Y Index', 'CESIUSD Index', 'CESIUSH Index', 'CESIUSS Index',
+            'CESIEUR Index', 'CESIEUH Index', 'CESIEUS Index', 'CESIEM Index', 'CESIEMXP Index', 'CESIEMFW Index'
+            )
                                         )
     
     if selected_data is not None:
@@ -221,20 +237,26 @@ def main():
         nsteps = st.sidebar.slider('N-Steps Ahead (in days)', min_value=0, max_value=100, value=0, step=10)
 
         if st.sidebar.button('Generate'):
-            similarity_distance = compute_distance(sample_data, target_date, compare_date, user_target_distance)
-            dates_score_list = dates_score(sample_data, similarity_distance, user_target_distance)
+            N = 5
+            similarity_score = compute_distance(sample_data, target_date, compare_date, user_target_distance)
+            dates_score_list = dates_score(sample_data, similarity_score, user_target_distance)
             sorted_dates_score_list = sorted(dates_score_list, key=lambda x: x[2], reverse = True)
             filtered_dates = filter_overlaps(sorted_dates_score_list)
             
             values_list = [(pd.to_datetime(start), pd.to_datetime(end), distance) for start, end, distance in filtered_dates]
-            
+
             # Original
-            fig_superimpose_target_original = create_figure(original_data, target_date, selected_data, values_list, 'Original', subtract=False, n_steps = nsteps)
+            st.write("##### Original")
+            fig_superimpose_target_original = create_figure(original_data, target_date, selected_data, values_list, subtract=False, n_steps = nsteps, N = N)
             st.plotly_chart(fig_superimpose_target_original)
 
             # Aligned
-            fig_superimpose_target_aligned = create_figure(original_data, target_date, selected_data, values_list, 'Aligned', subtract=True, n_steps = nsteps)
+            st.write("##### Aligned")
+            fig_superimpose_target_aligned = create_figure(original_data, target_date, selected_data, values_list, subtract=True, n_steps = nsteps, N = N)
             st.plotly_chart(fig_superimpose_target_aligned)
-    
+
+            if nsteps > 0:
+                st.write("##### 유사국면 이후 변화")
+                n_steps_ahead(original_data, values_list, n_steps = nsteps, N = N)
 if __name__ == "__main__":
     main()
