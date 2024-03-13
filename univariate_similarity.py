@@ -48,7 +48,7 @@ def compute_distance(dt, users_target, users_compare, user_distance):
         compare_values -= compare_values[0]
         dtw_distance = dtw.distance_fast(target_values, compare_values)
         pcorr_coef = np.corrcoef(target_values, compare_values)[0, 1]
-        score = sigmoid(abs(pcorr_coef) / (dtw_distance + 1e-10))
+        score = abs(pcorr_coef) / (dtw_distance + 1e-10)
         matrix[sliced_data.index[0].strftime("%Y-%m-%d")] = score
     return matrix
 
@@ -122,13 +122,13 @@ def data_select(selected_data):
 def n_steps_ahead(sample_data, values_list, n_steps = 0, N = 5):
     changes = []
     for _, (_, end_date, _) in enumerate(values_list[:N], 1):
-        sliced_data = sample_data[end_date:][:n_steps]
-        sliced_data.reset_index(drop=True, inplace=True)
+        sliced_data = sample_data.loc[end_date:].iloc[:n_steps]
+        sliced_data.reset_index(drop = True, inplace = True)
         change = sliced_data.iloc[-1] - sliced_data.iloc[0]
         changes.append(change[0])
     df = pd.DataFrame(changes)
     df = df.T
-    df.columns = [f'Graph {i}' for i in range(1, len(df.columns)+1)]
+    df.columns = [f'Graph {i}' for i in range(1, len(df.columns) + 1)]
     df.index = ['Change']
     st.table(df)
 
@@ -178,7 +178,8 @@ def create_figure(sample_data, target_date, selected_data, values_list, subtract
             sliced_trace = sliced_data[selected_data] - sliced_data[selected_data].iloc[0]
         else:
             sliced_trace = sliced_data[selected_data]
-        fig.add_trace(go.Scatter(x=sliced_data.index, y=sliced_trace, mode='lines', name=f'Graph {i}: {start_date.strftime("%Y-%m-%d")} to {end_date.strftime("%Y-%m-%d")} ({round(score, 7)})'))
+        fig.add_trace(go.Scatter(x=sliced_data.index, y=sliced_trace, mode='lines', name=f'Graph {i}: {start_date.strftime("%Y-%m-%d")} to {end_date.strftime("%Y-%m-%d")}'))
+        # fig.add_trace(go.Scatter(x=sliced_data.index, y=sliced_trace, mode='lines', name=f'Graph {i}: {start_date.strftime("%Y-%m-%d")} to {end_date.strftime("%Y-%m-%d")} ({round(score, 7)})'))
 
     fig.update_layout(
         width=WIDTH,
@@ -228,7 +229,7 @@ def main():
         min_year, min_month, min_day = sample_data.index[0].year, sample_data.index[0].month, sample_data.index[0].day
 
         compare_date = st.sidebar.date_input(
-            "Date Range for Analysis",
+            "Date Range for Analysis (* Set To Auto Min Date)",
             (datetime(min_year, min_month, min_day), datetime(2023, 9, 30)),
             format="YYYY/MM/DD"
         )
@@ -245,18 +246,16 @@ def main():
             
             values_list = [(pd.to_datetime(start), pd.to_datetime(end), distance) for start, end, distance in filtered_dates]
 
-            # Original
             st.write("##### Original")
             fig_superimpose_target_original = create_figure(original_data, target_date, selected_data, values_list, subtract=False, n_steps = nsteps, N = N)
             st.plotly_chart(fig_superimpose_target_original)
 
-            # Aligned
             st.write("##### Aligned")
             fig_superimpose_target_aligned = create_figure(original_data, target_date, selected_data, values_list, subtract=True, n_steps = nsteps, N = N)
             st.plotly_chart(fig_superimpose_target_aligned)
 
             if nsteps > 0:
-                st.write("##### 유사국면 이후 변화")
+                st.write("##### 유사기간 이후 변화")
                 n_steps_ahead(original_data, values_list, n_steps = nsteps, N = N)
 if __name__ == "__main__":
     main()
