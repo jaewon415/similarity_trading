@@ -6,10 +6,10 @@ import requests
 from dtaidistance import dtw
 import plotly.graph_objects as go
 from datetime import datetime
-import math
-st.set_option('deprecation.showPyplotGlobalUse', False)
 
+st.set_option('deprecation.showPyplotGlobalUse', False)
 SECRET_KEY = ''
+# SECRET_KEY = st.secrets.secret.secret_key
 
 def calculate_date_distance(dt, date_str1, date_str2):
     """
@@ -21,13 +21,14 @@ def calculate_date_distance(dt, date_str1, date_str2):
     date_distance = len(dt.loc[date_str1: date_str2])
     return date_distance
 
-def sigmoid(x):
-    """
-    Compute the sigmoid function
-    @param x: Input value
-    @return: Output value between 0 and 1
-    """
-    return 1 / (1 + math.exp(-x))
+def normalize_dtw_distance(dtw_distance, min_dtw_distance, max_dtw_distance):
+    return (dtw_distance - min_dtw_distance) / (max_dtw_distance - min_dtw_distance)
+
+def min_max_normalize(data):
+    min_val = min(data)
+    max_val = max(data)
+    normalized_data = [(x - min_val) / (max_val - min_val) for x in data]
+    return normalized_data
 
 def compute_distance(dt, users_target, users_compare, user_distance):
     """
@@ -42,13 +43,22 @@ def compute_distance(dt, users_target, users_compare, user_distance):
     target_values = np.array(target_data.values).reshape(-1)
     target_values -= target_values[0]
     compare_data = dt.loc[users_compare[0]: users_compare[1]]
+
+    dtw_values = []
+    corr_values = []
     for i in range(len(compare_data) - user_distance + 1):
         sliced_data = compare_data.iloc[i: i + user_distance, 0]
         compare_values = np.array(sliced_data).reshape(-1)
         compare_values -= compare_values[0]
-        dtw_distance = dtw.distance_fast(target_values, compare_values)
-        pcorr_coef = np.corrcoef(target_values, compare_values)[0, 1]
-        score = abs(pcorr_coef) / (dtw_distance + 1e-10)
+        dtw_distance = dtw.distance_fast(target_values, compare_values, window= int(0.1 * user_distance))
+        pcorr_coef = abs(np.corrcoef(target_values, compare_values)[0, 1])
+        corr_values.append(pcorr_coef)
+        dtw_values.append(dtw_distance)
+    
+    ndtw_values = min_max_normalize(dtw_values)
+    for i in range(len(compare_data) - user_distance + 1):
+        sliced_data = compare_data.iloc[i: i + user_distance, 0]
+        score = corr_values[i] + (1 - ndtw_values[i])
         matrix[sliced_data.index[0].strftime("%Y-%m-%d")] = score
     return matrix
 
@@ -78,6 +88,15 @@ def have_overlap(range1, range2):
     start2, end2, _ = range2
     return start1 <= end2 and start2 <= end1
 
+def z_normalize_df(df):
+    """
+    Normalize the values of a pandas DataFrame using z-score normalization.
+    @param df: the DataFrame to be normalized
+    @return df_normalized: the normalized DataFrame
+    """
+    df_normalized = (df - df.mean()) / df.std()
+    return df_normalized
+
 def filter_overlaps(ranges):
     """
     Filter out overlapping ranges from a list of ranges
@@ -95,23 +114,14 @@ def filter_overlaps(ranges):
             non_overlapping.append(r1)
     return non_overlapping
 
-def normalize_df(df):
-    """
-    Normalize the values of a pandas DataFrame using z-score normalization.
-    @param df: the DataFrame to be normalized
-    @return df_normalized: the normalized DataFrame
-    """
-    df_normalized = (df - df.mean()) / df.std()
-    return df_normalized
-
 def data_select(selected_data):    
     """
     Fetch data from a GitHub repository and select specific columns.
     @param selected_data: a list of column names to select from the data
     @return data: a dataframe containing the selected columns
     """
-
     url = f'https://raw.githubusercontent.com/jaewon415/data/main/prototype.csv'
+    
     headers = {'Authorization': f'token {SECRET_KEY}'}
     response = requests.get(url, headers=headers)
     csv_file = StringIO(response.text)
@@ -119,23 +129,36 @@ def data_select(selected_data):
     data = data.dropna()
     return data
 
-def n_steps_ahead(sample_data, values_list, n_steps = 0, N = 5):
-    changes = []
+def same_sign(a, b):
+    return (a >= 0 and b >= 0) or (a < 0 and b < 0)
+
+def n_steps_ahead(dt, target_date, values_list, n_steps=0, N=5):
+    result = []
+    
+    target_data = dt.loc[target_date[1]:].iloc[:n_steps]
+    target_change = target_data.iloc[-1] - target_data.iloc[0]
+
     for _, (_, end_date, _) in enumerate(values_list[:N], 1):
-        sliced_data = sample_data.loc[end_date:].iloc[:n_steps]
-        sliced_data.reset_index(drop = True, inplace = True)
+        sliced_data = dt.loc[end_date:].iloc[:n_steps]
+        sliced_data.reset_index(drop=True, inplace=True)
         change = sliced_data.iloc[-1] - sliced_data.iloc[0]
-        changes.append(change[0])
-    df = pd.DataFrame(changes)
-    df = df.T
+        
+        if same_sign(target_change[0], change[0]):
+            result.append([round(change[0], 5), 'Yes'])
+        else:
+            result.append([round(change[0], 5), 'No'])
+    
+    df = pd.DataFrame(result).T
     df.columns = [f'Graph {i}' for i in range(1, len(df.columns) + 1)]
-    df.index = ['Change']
+    df.index = ['Delta', 'Same Sign']
+    st.write("##### 유사기간 이후 변화")
+    st.write(f"Target Delta: {round(target_change[0], 5)}")
     st.table(df)
 
 def create_figure(sample_data, target_date, selected_data, values_list, subtract=False, n_steps = 0, N = 5):
     """
     Create a Plotly figure with optional subtraction operation.
-    @param sample_data: DataFrame containing sample data
+    @param sample_data: DataFrame containing sample daa
     @param target_date: list containing start and end dates for the target data
     @param selected_data: column name of the selected data series
     @param values_list: list of tuples containing start and end dates for other data series
@@ -179,7 +202,6 @@ def create_figure(sample_data, target_date, selected_data, values_list, subtract
         else:
             sliced_trace = sliced_data[selected_data]
         fig.add_trace(go.Scatter(x=sliced_data.index, y=sliced_trace, mode='lines', name=f'Graph {i}: {start_date.strftime("%Y-%m-%d")} to {end_date.strftime("%Y-%m-%d")}'))
-        # fig.add_trace(go.Scatter(x=sliced_data.index, y=sliced_trace, mode='lines', name=f'Graph {i}: {start_date.strftime("%Y-%m-%d")} to {end_date.strftime("%Y-%m-%d")} ({round(score, 7)})'))
 
     fig.update_layout(
         width=WIDTH,
@@ -192,7 +214,7 @@ def create_figure(sample_data, target_date, selected_data, values_list, subtract
 
 
 def main():
-    st.sidebar.title('단일 유사기간 분석툴')
+    st.sidebar.title('단일 유사기간 분석')
     selected_data = st.sidebar.selectbox(
             'Time Series Data:', 
             ('GT2 Govt', 'GT5 Govt', 'GT10 Govt', 'GT30 Govt', 'USYC2Y10 Index', 'USYC5Y30 Index', 'USYC1030 Index',
@@ -211,10 +233,19 @@ def main():
     
     if selected_data is not None:
         original_data = data_select(selected_data)
+        # print(original_data)
         original_data.index = pd.to_datetime(original_data.index)
         original_data = original_data.sort_index(ascending=True)
 
-        sample_data = normalize_df(original_data)
+        # sample_data = normalize_df(original_data)
+        
+        # sample_data = np.log(original_data)
+        sample_data = z_normalize_df(original_data)
+        # min_value = sample_data[selected_data].min()
+        # max_value = sample_data[selected_data].max()
+        # sample_data[selected_data] = (sample_data[selected_data] - min_value) / (max_value - min_value)
+
+        # sample_data = original_data
         sample_data.index = pd.to_datetime(sample_data.index)
         sample_data = sample_data.sort_index(ascending=True)
         target_date = st.sidebar.date_input(
@@ -229,7 +260,7 @@ def main():
         min_year, min_month, min_day = sample_data.index[0].year, sample_data.index[0].month, sample_data.index[0].day
 
         compare_date = st.sidebar.date_input(
-            "Date Range for Analysis (* Set To Auto Min Date)",
+            "Date Range for Analysis (* Auto set to Min. Date)",
             (datetime(min_year, min_month, min_day), datetime(2023, 9, 30)),
             format="YYYY/MM/DD"
         )
@@ -243,7 +274,7 @@ def main():
             dates_score_list = dates_score(sample_data, similarity_score, user_target_distance)
             sorted_dates_score_list = sorted(dates_score_list, key=lambda x: x[2], reverse = True)
             filtered_dates = filter_overlaps(sorted_dates_score_list)
-            
+            # print(filtered_dates)
             values_list = [(pd.to_datetime(start), pd.to_datetime(end), distance) for start, end, distance in filtered_dates]
 
             st.write("##### Original")
@@ -255,7 +286,6 @@ def main():
             st.plotly_chart(fig_superimpose_target_aligned)
 
             if nsteps > 0:
-                st.write("##### 유사기간 이후 변화")
-                n_steps_ahead(original_data, values_list, n_steps = nsteps, N = N)
+                n_steps_ahead(original_data, target_date, values_list, n_steps = nsteps, N = N)
 if __name__ == "__main__":
     main()
